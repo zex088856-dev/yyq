@@ -3,9 +3,27 @@ from openai import OpenAI
 import pandas as pd
 import numpy as np
 import time
+from supabase import create_client, Client
 
 # --- 页面全局配置 ---
 st.set_page_config(page_title="GlobalTrade AI Hub", page_icon="🌍", layout="wide", initial_sidebar_state="expanded")
+
+# --- 初始化 Supabase 客户端 ---
+@st.cache_resource
+def init_supabase() -> Client:
+    try:
+        url = st.secrets["SUPABASE_URL"]
+        key = st.secrets["SUPABASE_KEY"]
+        return create_client(url, key)
+    except KeyError:
+        st.error("🚨 密钥未找到！请检查 `.streamlit/secrets.toml` 文件，确保包含 SUPABASE_URL 和 SUPABASE_KEY。")
+        st.stop()
+
+supabase = init_supabase()
+
+# --- 初始化用户会话状态 ---
+if "user" not in st.session_state:
+    st.session_state.user = None
 
 # --- 1. 全局多语言 UI 字典 (i18n) - 5国语言全覆盖 ---
 TRANSLATIONS = {
@@ -185,16 +203,72 @@ st.markdown("""
     [data-testid="stSidebar"] { background-color: #ffffff; border-right: 1px solid #edf2f7; }
     .agent-card { padding: 12px; border-radius: 8px; background-color: #f8f9fa; border-left: 4px solid #0d6efd; margin-bottom: 15px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
     [data-testid="stMetricDelta"] svg { width: 1.5rem; height: 1.5rem; }
+    
+    /* 登录面板专用样式 */
+    .auth-box { max-width: 400px; margin: 4rem auto; padding: 2.5rem; background: white; border-radius: 15px; box-shadow: 0 10px 25px rgba(0,0,0,0.08); }
+    .auth-title { text-align: center; color: #1a202c; font-weight: 800; margin-bottom: 0.5rem; }
+    .auth-subtitle { text-align: center; color: #6c757d; font-size: 0.9rem; margin-bottom: 2rem; }
 </style>
 """, unsafe_allow_html=True)
 
 USER_AVATAR = "👤"
+
+
+# ==========================================
+# 登录 / 注册模块 (如果未登录则拦截渲染)
+# ==========================================
+if st.session_state.user is None:
+    st.markdown("<div class='auth-box'>", unsafe_allow_html=True)
+    st.markdown("<h2 class='auth-title'>🌍 GlobalTrade Hub</h2>", unsafe_allow_html=True)
+    st.markdown("<p class='auth-subtitle'>Sign in to access AI Agents & Market Intelligence</p>", unsafe_allow_html=True)
+    
+    tab_login, tab_signup = st.tabs(["🔑 Login", "📝 Sign Up"])
+    
+    with tab_login:
+        login_email = st.text_input("Email Address", key="login_email")
+        login_password = st.text_input("Password", type="password", key="login_pwd")
+        if st.button("Sign In", use_container_width=True, type="primary"):
+            try:
+                # 调用 Supabase 登录接口
+                response = supabase.auth.sign_in_with_password({"email": login_email, "password": login_password})
+                if response.user:
+                    st.session_state.user = response.user
+                    st.success("Login successful! Redirecting...")
+                    time.sleep(1)
+                    st.rerun()
+            except Exception as e:
+                st.error(f"Login Failed: {e}")
+
+    with tab_signup:
+        signup_email = st.text_input("Email Address", key="signup_email")
+        signup_password = st.text_input("Password", type="password", key="signup_pwd")
+        if st.button("Create Account", use_container_width=True):
+            try:
+                # 调用 Supabase 注册接口
+                response = supabase.auth.sign_up({"email": signup_email, "password": signup_password})
+                if response.user:
+                    st.success("Account created successfully! You can now log in.")
+                else:
+                    st.warning("Please check your email to confirm registration (if enabled in Supabase).")
+            except Exception as e:
+                st.error(f"Sign Up Failed: {e}")
+                
+    st.markdown("</div>", unsafe_allow_html=True)
+    
+    # 停止后续代码执行，直到用户登录
+    st.stop()
+
+
+# ==========================================
+# 以下为主系统代码 (仅登录后可见)
+# ==========================================
 
 # ==========================================
 # 顶级导航栏 & 干净利落的全局语言控制
 # ==========================================
 with st.sidebar:
     st.markdown("## 🌍 GlobalTrade")
+    st.caption(f"Welcome, {st.session_state.user.email}") # 显示登录用户的邮箱
     
     # 全局语言切换器：一点即切，干净利落
     lang_options = list(TRANSLATIONS.keys())
@@ -215,7 +289,13 @@ with st.sidebar:
         [t["mod_front"], t["mod_back"]], 
         label_visibility="collapsed"
     )
+    
+    # 登出按钮
     st.divider()
+    if st.button("🚪 Logout", use_container_width=True):
+        supabase.auth.sign_out()
+        st.session_state.user = None
+        st.rerun()
 
 # ==========================================
 # 模块 B：全球市场情报 Dashboard (专业后台)
